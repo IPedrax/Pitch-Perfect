@@ -1435,11 +1435,141 @@ const legacyThemes = {
 // DOM Elements - will be initialized after DOM loads
 let elements = {};
 
+// GitHub Pages compatible proxy detection and fallback
+async function checkProxyAvailability() {
+    console.log('🌐 Checking for GitHub Pages compatibility...');
+    
+    // Check if we're running on GitHub Pages
+    const isGitHubPages = window.location.hostname.includes('github.io') || 
+                         window.location.hostname.includes('github.com');
+    
+    if (isGitHubPages) {
+        console.log('📄 Running on GitHub Pages - using direct API mode');
+        return await setupGitHubPagesMode();
+    }
+    
+    // For local development, try to detect proxy server
+    try {
+        const testResponse = await fetch('http://localhost:8081/api/ollama/test', {
+            method: 'GET',
+            signal: AbortSignal.timeout(3000) // 3 second timeout
+        });
+        if (testResponse.ok) {
+            console.log('✅ Local proxy server detected');
+            return true;
+        }
+    } catch (error) {
+        console.log('📡 No proxy server detected, enabling fallback mode');
+    }
+    
+    return await setupFallbackMode();
+}
+
+// Setup GitHub Pages mode with direct API calls
+async function setupGitHubPagesMode() {
+    console.log('🚀 Configuring for GitHub Pages deployment...');
+    
+    // Override the webAPI to use direct calls or show instructions
+    window.electronAPI.ollamaChat = async function(prompt, model = 'ipedrax-weeky:latest') {
+        console.log('🌐 GitHub Pages: AI chat request intercepted');
+        
+        // Show user-friendly message for GitHub Pages
+        addChatMessage('system', '🌐 **GitHub Pages Mode**');
+        addChatMessage('system', 'AI features require a backend server. For full functionality:');
+        addChatMessage('system', '1. **Local Setup**: Clone this repository and run `node proxy-server.js`');
+        addChatMessage('system', '2. **Cloud Setup**: Deploy the proxy server to Heroku, Vercel, or similar');
+        addChatMessage('system', '3. **API Key**: Use direct Ollama API with your own endpoint');
+        addChatMessage('system', '');
+        addChatMessage('system', '💡 You can still create and edit slides manually!');
+        
+        return {
+            success: false,
+            error: 'AI features require backend server - see instructions above',
+            githubPages: true
+        };
+    };
+    
+    window.electronAPI.testOllamaConnection = async function() {
+        return {
+            success: false,
+            message: 'Running on GitHub Pages - backend required for AI features',
+            githubPages: true,
+            models: 0
+        };
+    };
+    
+    // Enable offline mode features
+    enableOfflineMode();
+    
+    return true;
+}
+
+// Setup fallback mode for local development without proxy
+async function setupFallbackMode() {
+    console.log('💻 Setting up local fallback mode...');
+    
+    // Show instructions for local setup
+    setTimeout(() => {
+        addChatMessage('system', '� **Local Development Setup**');
+        addChatMessage('system', 'To enable AI features, start the proxy server:');
+        addChatMessage('system', '```bash\nnode proxy-server.js\n```');
+        addChatMessage('system', 'Then refresh this page. The app will work in offline mode until then.');
+    }, 2000);
+    
+    enableOfflineMode();
+    return true;
+}
+
+// Enable offline mode with limited functionality
+function enableOfflineMode() {
+    console.log('📴 Enabling offline mode...');
+    
+    // Override webAPI functions for offline mode
+    const originalOllamaChat = window.electronAPI.ollamaChat;
+    const originalTestConnection = window.electronAPI.testOllamaConnection;
+    
+    window.electronAPI.ollamaChat = async function(prompt, model = 'ipedrax-weeky:latest') {
+        // Try original first (in case proxy becomes available)
+        try {
+            const result = await originalOllamaChat(prompt, model);
+            if (result.success) return result;
+        } catch (error) {
+            console.log('🔄 Falling back to offline mode');
+        }
+        
+        // Offline fallback with helpful message
+        addChatMessage('system', '📴 **Offline Mode**: AI features unavailable');
+        addChatMessage('system', 'You can still create and edit slides manually. For AI features, please set up the backend server.');
+        
+        return {
+            success: false,
+            error: 'Offline mode - AI features require backend server',
+            offline: true
+        };
+    };
+    
+    window.electronAPI.testOllamaConnection = async function() {
+        try {
+            const result = await originalTestConnection();
+            if (result.success) return result;
+        } catch (error) {
+            console.log('🔄 Connection test failed, using offline mode');
+        }
+        
+        return {
+            success: false,
+            message: 'Offline mode - backend server required for AI features',
+            offline: true,
+            models: 0
+        };
+    };
+}
+
 // Initialize the application
 async function init() {
     console.log('🚀 Initializing Pitch Perfect...');
     
-    // Initialize DOM elements
+    // Initialize DOM elements first
     console.log('🔍 Getting DOM elements...');
     elements = {
         createSlidesBtn: document.getElementById('create-slides-btn'),
@@ -1472,6 +1602,9 @@ async function init() {
     console.log('🔍 AI Suggest button element:', elements.aiSuggestBtn);
     console.log('🔍 AI Suggest button exists:', !!elements.aiSuggestBtn);
     
+    // Check proxy availability and setup appropriate mode
+    await checkProxyAvailability();
+    
     console.log('📦 Setting up event listeners...');
     setupEventListeners();
     console.log('✅ Event listeners set up successfully');
@@ -1479,7 +1612,7 @@ async function init() {
     initializeSlideCanvas();
     console.log('🔌 Loading available models...');
     await loadAvailableModels();
-    console.log(' Rendering slides...');
+    console.log('📄 Rendering slides...');
     renderSlides();
     console.log('🔄 Updating create slides button...');
     updateCreateSlidesButton();
@@ -1504,6 +1637,8 @@ async function init() {
         console.log('  🔧 Current slide:', currentSlideIndex >= 0 ? slides[currentSlideIndex] : null);
         console.log('  🔧 webAPI available:', !!window.electronAPI);
         console.log('  🔧 ollamaChat function:', typeof window.electronAPI?.ollamaChat);
+        console.log('  🔧 Is GitHub Pages:', window.location.hostname.includes('github.io'));
+        console.log('  🔧 Current hostname:', window.location.hostname);
         
         // Test button click programmatically
         if (elements.aiImproveBtn) {
@@ -1520,15 +1655,28 @@ async function init() {
     
     // Add a visual indicator that the app initialized
     setTimeout(() => {
-        addChatMessage('system', '✅ Pitch Perfect inicializado com sucesso!');
-        addChatMessage('system', '� **Startup Pitch Builder** - Create professional startup presentations with AI!');
-        addChatMessage('system', ' Now supports PowerPoint (.pptx) file format for presentations!');
+        const isGitHubPages = window.location.hostname.includes('github.io') || 
+                             window.location.hostname.includes('github.com');
+        
+        if (isGitHubPages) {
+            addChatMessage('system', '✅ Pitch Perfect running on GitHub Pages!');
+            addChatMessage('system', '🌐 **GitHub Pages Mode** - Optimized for static hosting');
+        } else {
+            addChatMessage('system', '✅ Pitch Perfect inicializado com sucesso!');
+        }
+        
+        addChatMessage('system', '🚀 **Startup Pitch Builder** - Create professional startup presentations with AI!');
+        addChatMessage('system', '📄 Now supports PowerPoint (.pptx) file format for presentations!');
         addChatMessage('system', '🎯 **Welcome! Let\'s create your startup pitch presentation.**');
         addChatMessage('system', 'I\'ll guide you through a quick questionnaire to build a professional pitch based on your validation data.');
         addChatMessage('system', '');
-        addChatMessage('system', '📋 **Alternative options:**');
+        addChatMessage('system', '📋 **Available options:**');
         addChatMessage('system', '• Click "➕ Add Slide" to create slides manually');
-        addChatMessage('system', '• Use "� Carregar Apresentação" to load existing presentations');
+        addChatMessage('system', '• Use "📂 Carregar Apresentação" to load existing presentations');
+        
+        if (isGitHubPages) {
+            addChatMessage('system', '• For AI features, set up backend server (see instructions above)');
+        }
         addChatMessage('system', '');
         
         // Auto-start the questionnaire
